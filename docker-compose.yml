@@ -1,0 +1,76 @@
+# =============================================================================
+# docker-compose.yml — example deployment for docker-konnect
+#
+# Adjust the environment section to match your setup, then:
+#
+#   docker compose up -d
+#
+# To use the "full" image (with extra Linux utilities), change the image tag
+# from "konnect" to "konnect-full", or from the ghcr.io equivalent.
+# =============================================================================
+
+services:
+  konnect:
+    # -------------------------------------------------------------------------
+    # Image — choose one of:
+    #   ferdiu/konnect:latest          minimal image (Docker Hub)
+    #   ferdiu/konnect:konnect-full    image with common Linux tools (Docker Hub)
+    #   ghcr.io/ferdiu/docker-konnect:latest
+    #   ghcr.io/ferdiu/docker-konnect:konnect-full
+    # -------------------------------------------------------------------------
+    image: ferdiu/konnect:latest
+
+    container_name: konnect
+
+    restart: unless-stopped
+
+    # -------------------------------------------------------------------------
+    # Network — konnect requires host networking for KDE Connect device
+    # discovery (UDP broadcast on the local LAN). If host mode is not
+    # available, map the ports below and set KONNECT_DISCOVERY_PORT to 1716.
+    # -------------------------------------------------------------------------
+    network_mode: host
+    # Alternatively, with bridge networking:
+    # ports:
+    #   - "1716:1716/udp"    # KDE Connect discovery
+    #   - "1716:1716/tcp"    # KDE Connect service
+    #   - "1764:1764/tcp"    # konnect service port (default when not using 1716)
+    #   - "8080:8080/tcp"    # REST admin API
+
+    # -------------------------------------------------------------------------
+    # Configuration via environment variables
+    # All variables are optional — omit any you want to leave at default.
+    # -------------------------------------------------------------------------
+    environment:
+      # Friendly name shown to KDE Connect clients (default: container hostname)
+      KONNECT_NAME: "my-server"
+
+      # UDP/TCP port used for KDE Connect discovery.
+      # Use 1716 to be compatible with the official KDE Connect app.
+      KONNECT_DISCOVERY_PORT: "1716"
+
+      # TCP port for the KDE Connect service channel
+      # KONNECT_SERVICE_PORT: "1764"
+
+      # TCP port (or unix socket path) for the REST admin API
+      KONNECT_ADMIN_PORT: "8080"
+
+      # Directory where konnect stores its config and device trust database.
+      # Override this if you mount a custom config volume.
+      # KONNECT_CONFIG_DIR: "/data/config"
+
+      # Set to any non-empty string to enable verbose debug logging
+      # KONNECT_DEBUG: "true"
+
+      # Set to any non-empty string to prepend timestamps to log lines
+      # KONNECT_TIMESTAMPS: "true"
+
+    volumes:
+      # Persist the konnect configuration and paired-device database across
+      # container restarts.  The named volume "konnect_data" is created
+      # automatically by Compose.
+      - konnect_data:/home/konnect/.config/konnect
+
+# Named volume declaration
+volumes:
+  konnect_data:

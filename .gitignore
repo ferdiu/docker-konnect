@@ -1,0 +1,9 @@
+# Docker build artifacts
+*.tar
+
+# Editor / OS artefacts
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

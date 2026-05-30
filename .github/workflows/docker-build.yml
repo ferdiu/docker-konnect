@@ -1,0 +1,229 @@
+# =============================================================================
+# .github/workflows/docker-build.yml
+#
+# Polls the upstream GitHub repository for new konnect releases every night at
+# midnight UTC. When a version newer than the latest tag in this repository is
+# found, the workflow builds and pushes both image variants for linux/amd64 and
+# linux/arm64 to Docker Hub and GitHub Container Registry (GHCR).
+#
+# konnect is NOT on PyPI — releases are tracked via the GitHub Releases API:
+#   https://api.github.com/repos/metallkopf/konnect/releases/latest
+#
+# Image variants
+#   konnect      — minimal Python + konnect (target stage: konnect)
+#   konnect-full — konnect + common Linux tools (target stage: konnect-full)
+#
+# Required repository secrets (Settings → Secrets → Actions):
+#   DOCKERHUB_USERNAME  — your Docker Hub username
+#   DOCKERHUB_TOKEN     — Docker Hub access token (read/write, not your password)
+#
+# The GITHUB_TOKEN secret is provided automatically by Actions.
+# =============================================================================
+
+name: Build & Publish Docker images
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # 00:00 UTC daily
+  workflow_dispatch: # allow manual trigger from the Actions tab
+    inputs:
+      force_build:
+        description: "Force build even if no new version is detected"
+        required: false
+        default: "false"
+
+env:
+  # Upstream repository to poll for releases
+  UPSTREAM_REPO: metallkopf/konnect
+
+  # Docker Hub namespace / repository names
+  DOCKERHUB_USER: ferdiu
+  DOCKERHUB_REPO_MIN: konnect # minimal image
+  DOCKERHUB_REPO_FULL: konnect-full # full image
+
+  # GitHub Container Registry image (same repo, different tags)
+  GHCR_IMAGE: ghcr.io/ferdiu/docker-konnect
+
+##############################################################################
+# Job 1 — Poll the upstream GitHub releases and decide whether a build is needed
+##############################################################################
+jobs:
+  check-version:
+    name: Check upstream version
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.compare.outputs.new_version }}
+      should_build: ${{ steps.compare.outputs.should_build }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - name: Resolve latest upstream release from GitHub
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Use the GitHub REST API to find the latest release tag.
+          # The GITHUB_TOKEN is used to avoid unauthenticated rate-limit (60 req/h).
+          # Strip a leading "v" so we get a bare semver, e.g. "0.4.0".
+          VERSION=$(gh api "repos/${{ env.UPSTREAM_REPO }}/releases/latest" \
+            --jq '.tag_name | ltrimstr("v")')
+
+          [ -n "$VERSION" ] || { echo "ERROR: could not resolve upstream version"; exit 1; }
+
+          echo "upstream_version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream release: $VERSION"
+
+      - name: Resolve latest tagged version in this repo
+        id: local
+        run: |
+          set -euo pipefail
+          # The latest v* git tag on this repo is used as the "already built" marker.
+          LATEST_TAG=$(git tag --list 'v*' | sort -V | tail -n1 | sed 's/^v//')
+          echo "local_version=${LATEST_TAG:-none}" >> "$GITHUB_OUTPUT"
+          echo "Latest local tag: ${LATEST_TAG:-<none>}"
+
+      - name: Compare versions and decide
+        id: compare
+        run: |
+          set -euo pipefail
+          UPSTREAM="${{ steps.upstream.outputs.upstream_version }}"
+          LOCAL="${{ steps.local.outputs.local_version }}"
+          FORCE="${{ github.event.inputs.force_build }}"
+
+          # Normalise to zero-padded integers for numeric comparison (x.y.z)
+          norm() { echo "$1" | awk -F. '{printf "%05d%05d%05d\n", $1+0, $2+0, $3+0}'; }
+
+          echo "new_version=$UPSTREAM" >> "$GITHUB_OUTPUT"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "→ Forced build requested"
+          elif [ "$LOCAL" = "none" ] || [ "$(norm "$UPSTREAM")" -gt "$(norm "$LOCAL")" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "→ New version detected ($LOCAL → $UPSTREAM), build needed"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "→ Already up to date ($LOCAL), skipping"
+          fi
+
+  ##############################################################################
+  # Job 2 — Build and push images
+  ##############################################################################
+  build-and-push:
+    name: Build & push (${{ matrix.variant.tag }})
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          # ---- minimal image -----------------------------------------------
+          - tag: konnect
+            docker_repo: ferdiu/konnect
+            target: konnect
+            suffix: "" # empty → plain tags: "latest", "0.4.0"
+
+          # ---- full image --------------------------------------------------
+          - tag: konnect-full
+            docker_repo: ferdiu/konnect-full
+            target: konnect-full
+            suffix: "-full" # tags: "latest-full", "0.4.0-full"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # QEMU is required to emulate arm64 on the amd64 GitHub-hosted runner
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ---- Registry logins -------------------------------------------------
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- Compute image metadata (tags + labels) --------------------------
+      - name: Compute Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ matrix.variant.docker_repo }}
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            # Immutable version tag, e.g. "0.4.0" or "0.4.0-full"
+            type=raw,value=${{ needs.check-version.outputs.new_version }}${{ matrix.variant.suffix }}
+            # Rolling "latest" tag (or "latest-full")
+            type=raw,value=latest${{ matrix.variant.suffix }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.variant.tag }}
+            org.opencontainers.image.description=Headless KDE Connect server (${{ matrix.variant.tag }} variant)
+            org.opencontainers.image.version=${{ needs.check-version.outputs.new_version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=GPL-2.0
+
+      # ---- Build & push ----------------------------------------------------
+      - name: Build and push ${{ matrix.variant.tag }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          # Build only the target stage so the final image is not polluted
+          target: ${{ matrix.variant.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            KONNECT_VERSION=${{ needs.check-version.outputs.new_version }}
+          # Reuse layer cache stored in GHCR to speed up subsequent builds
+          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.variant.suffix }}
+          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.variant.suffix }},mode=max
+
+  ##############################################################################
+  # Job 3 — Tag the commit that triggered this build
+  ##############################################################################
+  tag-release:
+    name: Tag repository
+    needs: [check-version, build-and-push]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write # required to push a tag
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create and push version tag
+        env:
+          VERSION: ${{ needs.check-version.outputs.new_version }}
+          GIT_USER_NAME: ferdiu
+          GIT_USER_EMAIL: ferdiu@users.noreply.github.com
+        run: |
+          git config user.name  "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+          git tag "v${VERSION}" -m "konnect ${VERSION}"
+          git push origin "v${VERSION}"
