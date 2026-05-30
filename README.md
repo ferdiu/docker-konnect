@@ -75,7 +75,7 @@ docker run --rm --network host ferdiu/konnect:latest --debug --name mybox
 
 ## Docker Compose
 
-A ready-to-use example is provided in [`docker-compose.yml`](docker-compose.yml). Copy and adjust it to your needs:
+A ready-to-use example is provided in [`docker-compose.yml`](https://github.com/ferdiu/docker-konnect/blob/main/docker-compose.yml). Copy and adjust it to your needs:
 
 ```sh
 curl -O https://raw.githubusercontent.com/ferdiu/docker-konnect/main/docker-compose.yml
