@@ -2,9 +2,9 @@
 # .github/workflows/docker-build.yml
 #
 # Polls the upstream GitHub repository for new konnect releases every night at
-# midnight UTC. When a version newer than the latest tag in this repository is
-# found, the workflow builds and pushes both image variants for linux/amd64 and
-# linux/arm64 to Docker Hub and GitHub Container Registry (GHCR).
+# midnight UTC. When a version newer than the latest image already published to
+# GHCR is found, the workflow builds and pushes both image variants for
+# linux/amd64 and linux/arm64 to Docker Hub and GitHub Container Registry.
 #
 # konnect is NOT on PyPI — releases are tracked via the GitHub Releases API:
 #   https://api.github.com/repos/metallkopf/konnect/releases/latest
@@ -44,27 +44,22 @@ env:
   GHCR_IMAGE: ghcr.io/ferdiu/docker-konnect
 
 ##############################################################################
-# Job 1 — Poll the upstream GitHub releases and decide whether a build is needed
+# Job 1 — Poll upstream and GHCR, decide whether a build is needed
 ##############################################################################
 jobs:
   check-version:
     name: Check upstream version
     runs-on: ubuntu-latest
 
-    # Only needs to read repo contents and call the public GitHub API
     permissions:
       contents: read
+      packages: read
 
     outputs:
       new_version: ${{ steps.compare.outputs.new_version }}
       should_build: ${{ steps.compare.outputs.should_build }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-tags: true
-
       - name: Resolve latest upstream release from GitHub
         id: upstream
         env:
@@ -83,14 +78,22 @@ jobs:
           echo "upstream_version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Latest upstream release: $VERSION"
 
-      - name: Resolve latest tagged version in this repo
+      - name: Resolve latest published version from GHCR
         id: local
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # The latest v* git tag on this repo is used as the "already built" marker.
-          LATEST_TAG=$(git tag --list 'v*' | sort -V | tail -n1 | sed 's/^v//')
-          echo "local_version=${LATEST_TAG:-none}" >> "$GITHUB_OUTPUT"
-          echo "Latest local tag: ${LATEST_TAG:-<none>}"
+
+          # Query the GHCR package versions API and extract the highest
+          # bare semver tag (x.y.z) already published.  This is the source
+          # of truth for what has already been built — no git tags needed.
+          VERSION=$(gh api "users/ferdiu/packages/container/docker-konnect/versions" \
+            --jq '[.[].metadata.container.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort | last' \
+            2>/dev/null || echo "")
+
+          echo "local_version=${VERSION:-none}" >> "$GITHUB_OUTPUT"
+          echo "Latest published version: ${VERSION:-<none>}"
 
       - name: Compare versions and decide
         id: compare
@@ -213,29 +216,3 @@ jobs:
           # Reuse layer cache stored in GHCR to speed up subsequent builds
           cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.variant.suffix }}
           cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.variant.suffix }},mode=max
-
-  ##############################################################################
-  # Job 3 — Tag the commit that triggered this build
-  ##############################################################################
-  tag-release:
-    name: Tag repository
-    needs: [check-version, build-and-push]
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write # required to push a tag
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Create and push version tag
-        env:
-          VERSION: ${{ needs.check-version.outputs.new_version }}
-          GIT_USER_NAME: ferdiu
-          GIT_USER_EMAIL: ferdiu@users.noreply.github.com
-        run: |
-          git config user.name  "$GIT_USER_NAME"
-          git config user.email "$GIT_USER_EMAIL"
-          git tag "v${VERSION}" -m "konnect ${VERSION}"
-          git push origin "v${VERSION}"
