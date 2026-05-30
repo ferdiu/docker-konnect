@@ -36,10 +36,9 @@ env:
   # Upstream repository to poll for releases
   UPSTREAM_REPO: metallkopf/konnect
 
-  # Docker Hub namespace / repository names
-  DOCKERHUB_USER: ferdiu
-  DOCKERHUB_REPO_MIN: konnect # minimal image
-  DOCKERHUB_REPO_FULL: konnect-full # full image
+  # Docker Hub repository names  (user/repo)
+  DOCKERHUB_REPO_MIN: ferdiu/konnect # minimal image
+  DOCKERHUB_REPO_FULL: ferdiu/konnect-full # full image
 
   # GitHub Container Registry image (same repo, different tags)
   GHCR_IMAGE: ghcr.io/ferdiu/docker-konnect
@@ -51,6 +50,11 @@ jobs:
   check-version:
     name: Check upstream version
     runs-on: ubuntu-latest
+
+    # Only needs to read repo contents and call the public GitHub API
+    permissions:
+      contents: read
+
     outputs:
       new_version: ${{ steps.compare.outputs.new_version }}
       should_build: ${{ steps.compare.outputs.should_build }}
@@ -121,6 +125,14 @@ jobs:
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
 
+    # "packages: write" is required for GITHUB_TOKEN to push to GHCR.
+    # Without this explicit grant the token only has read access and every
+    # push attempt returns "denied: installation not allowed to Create
+    # organization package".
+    permissions:
+      contents: read
+      packages: write
+
     strategy:
       fail-fast: false
       matrix:
@@ -161,7 +173,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ---- Compute image metadata (tags + labels) --------------------------
