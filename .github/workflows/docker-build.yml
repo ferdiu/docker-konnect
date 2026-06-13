@@ -97,9 +97,21 @@ jobs:
           # Query the GHCR package versions API and extract the highest
           # bare semver tag (x.y.z) already published.  This is the source
           # of truth for what has already been built — no git tags needed.
-          VERSION=$(gh api "users/ferdiu/packages/container/konnect/versions" \
+          #
+          # The API returns 404 when the package has never been pushed (e.g.
+          # first build after renaming the image).  We capture both stdout and
+          # stderr, suppress the non-zero exit with "|| true", and treat any
+          # non-semver result (including the 404 JSON body) as "none".
+          RAW=$(gh api "users/ferdiu/packages/container/konnect/versions" \
             --jq '[.[].metadata.container.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort | last' \
-            2>/dev/null || echo "")
+            2>&1 || true)
+
+          # Accept only a bare x.y.z string; anything else (error JSON, "null", empty) → none
+          if echo "$RAW" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            VERSION="$RAW"
+          else
+            VERSION=""
+          fi
 
           echo "local_version=${VERSION:-none}" >> "$GITHUB_OUTPUT"
           echo "Latest published version: ${VERSION:-<none>}"
@@ -112,15 +124,19 @@ jobs:
           LOCAL="${{ steps.local.outputs.local_version }}"
           FORCE="${{ github.event.inputs.force_build }}"
 
-          # Normalise to zero-padded integers for numeric comparison (x.y.z)
-          norm() { echo "$1" | awk -F. '{printf "%05d%05d%05d\n", $1+0, $2+0, $3+0}'; }
+          # Normalise x.y.z to a zero-padded integer string for comparison.
+          # awk prints to stdout; we compare with standard shell integer test.
+          norm() { echo "$1" | awk -F. '{printf "%d\n", $1*1000000 + $2*1000 + $3}'; }
 
           echo "new_version=$UPSTREAM" >> "$GITHUB_OUTPUT"
 
           if [ "$FORCE" = "true" ]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             echo "→ Forced build requested"
-          elif [ "$LOCAL" = "none" ] || [ "$(norm "$UPSTREAM")" -gt "$(norm "$LOCAL")" ]; then
+          elif [ "$LOCAL" = "none" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "→ No published version found (first build), build needed"
+          elif [ "$(norm "$UPSTREAM")" -gt "$(norm "$LOCAL")" ]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             echo "→ New version detected ($LOCAL → $UPSTREAM), build needed"
           else
