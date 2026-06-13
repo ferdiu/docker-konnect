@@ -27,9 +27,11 @@ FROM python:${PYTHON_VERSION}-slim AS konnect
 ARG KONNECT_VERSION
 ARG UID=1000
 ARG GID=1000
+ARG IMAGE_TITLE="konnect"
+ARG IMAGE_DESCRIPTION="Headless KDE Connect server — minimal image"
 
-LABEL org.opencontainers.image.title="konnect" \
-      org.opencontainers.image.description="Headless KDE Connect server — minimal image" \
+LABEL org.opencontainers.image.title="${IMAGE_TITLE}" \
+      org.opencontainers.image.description="${IMAGE_DESCRIPTION}" \
       org.opencontainers.image.authors="Federico Manzella <ferdiu>" \
       org.opencontainers.image.source="https://github.com/ferdiu/docker-konnect" \
       org.opencontainers.image.licenses="GPL-2.0"
@@ -58,7 +60,13 @@ RUN python -m venv "${VIRTUAL_ENV}" \
       "twisted[tls]" \
       "https://github.com/metallkopf/konnect/releases/download/${KONNECT_VERSION}/konnect-${KONNECT_VERSION}-py3-none-any.whl"
 
-# Put the venv binaries on PATH so CMD can reference them by name
+# Build-time sanity check: fail the build immediately if the binary is absent
+# or not executable, rather than discovering the problem at container start.
+RUN test -x "${VIRTUAL_ENV}/bin/konnectd" \
+ || { echo "ERROR: konnectd not found in venv — check KONNECT_VERSION=${KONNECT_VERSION}"; exit 1; }
+
+# Put the venv binaries on PATH so scripts can reference them by name.
+# The absolute path is still preferred in entrypoint.sh for OCI-runtime safety.
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 # ----------------------------
@@ -66,16 +74,21 @@ ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 # ----------------------------
 # All env-vars map 1-to-1 to konnectd CLI flags.
 # Override them at `docker run` time with -e or in a compose file.
-ENV KONNECT_NAME=""           \
-    KONNECT_DISCOVERY_PORT="" \
-    KONNECT_SERVICE_PORT=""   \
-    KONNECT_ADMIN_PORT=""     \
-    KONNECT_CONFIG_DIR=""     \
-    KONNECT_DEBUG=""          \
+#
+# KONNECT_CONFIG_DIR is set explicitly so the entrypoint always passes
+# --config-dir and the effective path is unambiguous regardless of the
+# konnect upstream default.
+ENV KONNECT_NAME=""            \
+    KONNECT_DISCOVERY_PORT=""  \
+    KONNECT_SERVICE_PORT=""    \
+    KONNECT_ADMIN_PORT="8080"  \
+    KONNECT_CONFIG_DIR="/data" \
+    KONNECT_DEBUG=""           \
     KONNECT_TIMESTAMPS=""
 
-# Config and data directories
-RUN install -d -o konnect -g konnect /home/konnect/.config/konnect /data
+# /data is the persistent config and paired-device database directory.
+# Mount a named volume or host path here to survive container restarts.
+RUN install -d -o konnect -g konnect /data
 VOLUME ["/data"]
 
 # Default network ports used by konnect
@@ -92,6 +105,18 @@ WORKDIR /home/konnect
 COPY --chown=konnect:konnect entrypoint.sh /home/konnect/entrypoint.sh
 RUN chmod +x /home/konnect/entrypoint.sh
 
+# Health check using Python stdlib — available in both image variants without
+# installing extra tools.  Probes the admin TCP port; exits 1 if refused.
+# The port is read from KONNECT_ADMIN_PORT at check time so overrides work.
+# If KONNECT_ADMIN_PORT is set to a unix socket path, the int() cast raises
+# ValueError and we exit 0 gracefully to avoid false negatives.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "\
+import os, socket, sys; \
+p = os.environ.get('KONNECT_ADMIN_PORT', '8080'); \
+port = int(p) if p.isdigit() else sys.exit(0); \
+s = socket.socket(); s.settimeout(3); s.connect(('127.0.0.1', port)); s.close()"
+
 ENTRYPOINT ["/home/konnect/entrypoint.sh"]
 CMD []
 
@@ -100,8 +125,11 @@ CMD []
 # ---------------------------------------------------------------------------
 FROM konnect AS konnect-full
 
-LABEL org.opencontainers.image.title="konnect-full" \
-      org.opencontainers.image.description="Headless KDE Connect server — image with common Linux tools" \
+ARG IMAGE_TITLE="konnect-full"
+ARG IMAGE_DESCRIPTION="Headless KDE Connect server — image with common Linux tools"
+
+LABEL org.opencontainers.image.title="${IMAGE_TITLE}" \
+      org.opencontainers.image.description="${IMAGE_DESCRIPTION}" \
       org.opencontainers.image.authors="Federico Manzella <ferdiu>" \
       org.opencontainers.image.source="https://github.com/ferdiu/docker-konnect" \
       org.opencontainers.image.licenses="GPL-2.0"

@@ -16,14 +16,14 @@ Unofficial Docker image for **[konnect](https://github.com/metallkopf/konnect)**
 | `latest` / `X.Y.Z` | Minimal image — Python + konnect only |
 | `latest-full` / `X.Y.Z-full` | Extends the minimal image with common Linux utilities (`busybox`, `curl`, `wget`, `jq`, `vim-tiny`, `net-tools`, …) |
 
-Both variants are published to **Docker Hub** and **GHCR**:
+Both variants are published to **Docker Hub** and **GHCR** under the same naming scheme:
 
 ```
 ferdiu/konnect:latest
-ferdiu/konnect-full:latest
+ferdiu/konnect:latest-full
 
-ghcr.io/ferdiu/docker-konnect:latest
-ghcr.io/ferdiu/docker-konnect:latest-full
+ghcr.io/ferdiu/konnect:latest
+ghcr.io/ferdiu/konnect:latest-full
 ```
 
 Architectures: `linux/amd64`, `linux/arm64`.
@@ -41,7 +41,7 @@ docker run -d \
   --restart unless-stopped \
   -e KONNECT_NAME="my-server" \
   -e KONNECT_DISCOVERY_PORT="1716" \
-  -v konnect_data:/home/konnect/.config/konnect \
+  -v konnect_data:/data \
   ferdiu/konnect:latest
 ```
 
@@ -59,7 +59,7 @@ All konnect options are exposed as environment variables:
 | `KONNECT_DISCOVERY_PORT` | `--discovery-port` | `1764` |
 | `KONNECT_SERVICE_PORT` | `--service-port` | `1764` |
 | `KONNECT_ADMIN_PORT` | `--admin-port` | `8080` |
-| `KONNECT_CONFIG_DIR` | `--config-dir` | `~/.config/konnect` |
+| `KONNECT_CONFIG_DIR` | `--config-dir` | `/data` |
 | `KONNECT_DEBUG` | `--debug` | *(unset)* |
 | `KONNECT_TIMESTAMPS` | `--timestamps` | *(unset)* |
 
@@ -89,9 +89,9 @@ docker compose up -d
 
 | Path | Purpose |
 |------|---------|
-| `/home/konnect/.config/konnect` | konnect configuration & paired-device database |
+| `/data` | konnect configuration & paired-device database |
 
-Mount a named volume or host directory here to persist your configuration across container restarts and upgrades.
+Mount a named volume or host directory at `/data` to persist your configuration across container restarts and upgrades.
 
 ---
 
@@ -102,6 +102,12 @@ Mount a named volume or host directory here to persist your configuration across
 | `1716` | UDP + TCP | KDE Connect discovery (use with official app) |
 | `1764` | TCP | konnect service port (konnect default) |
 | `8080` | TCP | REST admin API |
+
+---
+
+## Health check
+
+Both image variants include a built-in health check that probes the admin TCP port every 30 seconds using the Python standard library (no extra tools required). The probe respects the `KONNECT_ADMIN_PORT` environment variable, so custom port overrides are automatically honoured.
 
 ---
 
@@ -132,7 +138,7 @@ curl -X POST http://localhost:8080/ping/@phone
 
 ## Updating
 
-The CI workflow polls [PyPI](https://pypi.org/project/konnect/) every night at midnight UTC. A new image is built automatically whenever a new konnect version is released. To update your running container:
+The CI workflow polls the [upstream GitHub releases](https://github.com/metallkopf/konnect/releases) every night at midnight UTC. A new image is built automatically whenever a new konnect version is released. To update your running container:
 
 ```sh
 docker compose pull && docker compose up -d

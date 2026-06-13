@@ -9,9 +9,19 @@
 # konnect is NOT on PyPI — releases are tracked via the GitHub Releases API:
 #   https://api.github.com/repos/metallkopf/konnect/releases/latest
 #
-# Image variants
-#   konnect      — minimal Python + konnect (target stage: konnect)
-#   konnect-full — konnect + common Linux tools (target stage: konnect-full)
+# Image variants and tags (consistent across both registries):
+#
+#   Minimal image
+#     ferdiu/konnect:latest
+#     ferdiu/konnect:X.Y.Z
+#     ghcr.io/ferdiu/konnect:latest
+#     ghcr.io/ferdiu/konnect:X.Y.Z
+#
+#   Full image (konnect + common Linux utilities)
+#     ferdiu/konnect:latest-full
+#     ferdiu/konnect:X.Y.Z-full
+#     ghcr.io/ferdiu/konnect:latest-full
+#     ghcr.io/ferdiu/konnect:X.Y.Z-full
 #
 # Required repository secrets (Settings → Secrets → Actions):
 #   DOCKERHUB_USERNAME  — your Docker Hub username
@@ -36,12 +46,11 @@ env:
   # Upstream repository to poll for releases
   UPSTREAM_REPO: metallkopf/konnect
 
-  # Docker Hub repository names  (user/repo)
-  DOCKERHUB_REPO_MIN: ferdiu/konnect # minimal image
-  DOCKERHUB_REPO_FULL: ferdiu/konnect-full # full image
+  # Single Docker Hub repository — variants are distinguished by tag suffix
+  DOCKERHUB_REPO: ferdiu/konnect
 
-  # GitHub Container Registry image (same repo, different tags)
-  GHCR_IMAGE: ghcr.io/ferdiu/docker-konnect
+  # GitHub Container Registry image (same repo, same tag scheme)
+  GHCR_IMAGE: ghcr.io/ferdiu/konnect
 
 ##############################################################################
 # Job 1 — Poll upstream and GHCR, decide whether a build is needed
@@ -88,7 +97,7 @@ jobs:
           # Query the GHCR package versions API and extract the highest
           # bare semver tag (x.y.z) already published.  This is the source
           # of truth for what has already been built — no git tags needed.
-          VERSION=$(gh api "users/ferdiu/packages/container/docker-konnect/versions" \
+          VERSION=$(gh api "users/ferdiu/packages/container/konnect/versions" \
             --jq '[.[].metadata.container.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort | last' \
             2>/dev/null || echo "")
 
@@ -142,15 +151,13 @@ jobs:
         variant:
           # ---- minimal image -----------------------------------------------
           - tag: konnect
-            docker_repo: ferdiu/konnect
             target: konnect
-            suffix: "" # empty → plain tags: "latest", "0.4.0"
+            suffix: "" # tags: "latest",      "X.Y.Z"
 
           # ---- full image --------------------------------------------------
           - tag: konnect-full
-            docker_repo: ferdiu/konnect-full
             target: konnect-full
-            suffix: "-full" # tags: "latest-full", "0.4.0-full"
+            suffix: "-full" # tags: "latest-full",  "X.Y.Z-full"
 
     steps:
       - name: Checkout repository
@@ -185,7 +192,7 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: |
-            ${{ matrix.variant.docker_repo }}
+            ${{ env.DOCKERHUB_REPO }}
             ${{ env.GHCR_IMAGE }}
           tags: |
             # Immutable version tag, e.g. "0.4.0" or "0.4.0-full"
@@ -213,6 +220,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             KONNECT_VERSION=${{ needs.check-version.outputs.new_version }}
+            IMAGE_TITLE=${{ matrix.variant.tag }}
+            IMAGE_DESCRIPTION=Headless KDE Connect server (${{ matrix.variant.tag }} variant)
           # Reuse layer cache stored in GHCR to speed up subsequent builds
           cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.variant.suffix }}
           cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.variant.suffix }},mode=max
+
+      # ---- Sync README to Docker Hub description ---------------------------
+      # Runs only for the minimal variant (suffix == "") to avoid pushing the
+      # same README twice — both variants share a single Docker Hub repo.
+      # peter-evans/dockerhub-description@v5 requires a Docker Hub personal
+      # access token (read/write scope) stored as DOCKERHUB_TOKEN.
+      - name: Update Docker Hub description
+        if: matrix.variant.suffix == ''
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_REPO }}
+          readme-filepath: ./README.md
+          short-description: ${{ github.event.repository.description }}

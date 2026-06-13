@@ -6,7 +6,7 @@
 #   docker compose up -d
 #
 # To use the "full" image (with extra Linux utilities), change the image tag
-# from "konnect" to "konnect-full", or from the ghcr.io equivalent.
+# from "latest" to "latest-full".
 # =============================================================================
 
 services:
@@ -14,9 +14,9 @@ services:
     # -------------------------------------------------------------------------
     # Image — choose one of:
     #   ferdiu/konnect:latest          minimal image (Docker Hub)
-    #   ferdiu/konnect:konnect-full    image with common Linux tools (Docker Hub)
-    #   ghcr.io/ferdiu/docker-konnect:latest
-    #   ghcr.io/ferdiu/docker-konnect:konnect-full
+    #   ferdiu/konnect:latest-full     image with common Linux tools (Docker Hub)
+    #   ghcr.io/ferdiu/konnect:latest
+    #   ghcr.io/ferdiu/konnect:latest-full
     # -------------------------------------------------------------------------
     image: ferdiu/konnect:latest
 
@@ -56,8 +56,8 @@ services:
       KONNECT_ADMIN_PORT: "8080"
 
       # Directory where konnect stores its config and device trust database.
-      # Override this if you mount a custom config volume.
-      # KONNECT_CONFIG_DIR: "/data/config"
+      # Defaults to /data (the declared volume mount point).
+      KONNECT_CONFIG_DIR: "/data"
 
       # Set to any non-empty string to enable verbose debug logging
       # KONNECT_DEBUG: "true"
@@ -68,8 +68,9 @@ services:
     volumes:
       # Persist the konnect configuration and paired-device database across
       # container restarts.  The named volume "konnect_data" is created
-      # automatically by Compose.
-      - konnect_data:/home/konnect/.config/konnect
+      # automatically by Compose and is mounted at /data (the value of
+      # KONNECT_CONFIG_DIR).
+      - konnect_data:/data
 
 # Named volume declaration
 volumes:

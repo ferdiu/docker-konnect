@@ -4,8 +4,14 @@
 #
 # Every recognised env-var is optional; unset or empty values are silently
 # ignored so that konnect falls back to its own defaults.
+#
+# The binary is referenced by its absolute path inside the virtualenv to
+# avoid relying on PATH resolution, which is not guaranteed to be inherited
+# correctly by all OCI runtimes (e.g. Podman without a login shell).
 # =============================================================================
 set -eu
+
+KONNECTD="/home/konnect/venv/bin/konnectd"
 
 ARGS=""
 
@@ -30,8 +36,7 @@ ARGS=""
 # --timestamps (boolean flag)
 [ -n "${KONNECT_TIMESTAMPS:-}" ]     && ARGS="$ARGS --timestamps"
 
-# Append any extra arguments passed directly to `docker run … <extra>` or CMD
-ARGS="$ARGS $*"
-
+# Append any extra arguments passed directly to `docker run … <extra>` or CMD.
+# "$@" is used instead of $* so arguments containing spaces are preserved.
 # shellcheck disable=SC2086
-exec konnectd $ARGS
+exec "$KONNECTD" $ARGS "$@"
