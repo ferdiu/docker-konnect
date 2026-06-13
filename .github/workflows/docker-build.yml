@@ -25,7 +25,7 @@
 #
 # Required repository secrets (Settings → Secrets → Actions):
 #   DOCKERHUB_USERNAME  — your Docker Hub username
-#   DOCKERHUB_TOKEN     — Docker Hub access token (read/write, not your password)
+#   DOCKERHUB_TOKEN     — Docker Hub access token (read/write) for pushing images
 #
 # The GITHUB_TOKEN secret is provided automatically by Actions.
 # =============================================================================
@@ -243,16 +243,18 @@ jobs:
           cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.variant.suffix }},mode=max
 
       # ---- Sync README to Docker Hub description ---------------------------
-      # Runs only for the minimal variant (suffix == "") to avoid pushing the
-      # same README twice — both variants share a single Docker Hub repo.
-      # peter-evans/dockerhub-description@v5 requires a Docker Hub personal
-      # access token (read/write scope) stored as DOCKERHUB_TOKEN.
+      # Disabled: the Docker Hub repository description API does NOT accept
+      # Personal Access Tokens (PATs) — it requires the actual account password
+      # (see docker/hub-feedback#1927), which we deliberately do not store in
+      # GitHub secrets. To re-enable, add a DOCKERHUB_PASSWORD secret containing
+      # your Docker Hub account password and change the `if` condition to:
+      #   if: matrix.variant.suffix == ''
       - name: Update Docker Hub description
-        if: matrix.variant.suffix == ''
+        if: false
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
           repository: ${{ env.DOCKERHUB_REPO }}
           readme-filepath: ./README.md
           short-description: ${{ github.event.repository.description }}
