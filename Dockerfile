@@ -55,7 +55,7 @@ RUN groupadd --gid "${GID}" konnect \
 #   only via the "twisted[tls]" extra.  Installing twisted[tls] explicitly
 #   satisfies the full TLS dependency chain without pinning transitive versions.
 ENV VIRTUAL_ENV=/home/konnect/venv
-RUN python -m venv "${VIRTUAL_ENV}" \
+RUN python -m venv --copies --upgrade-deps "${VIRTUAL_ENV}" \
  && "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir \
       "twisted[tls]" \
       "https://github.com/metallkopf/konnect/releases/download/${KONNECT_VERSION}/konnect-${KONNECT_VERSION}-py3-none-any.whl"
